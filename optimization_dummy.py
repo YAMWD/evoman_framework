@@ -1,253 +1,308 @@
-###############################################################################
-# EvoMan FrameWork - V1.0 2016  			                                  #
-# DEMO : Neuroevolution - Genetic Algorithm  neural network.                  #
-# Author: Karine Miras        			                                      #
-# karine.smiras@gmail.com     				                                  #
-###############################################################################
-
-# imports framework
-import sys
-
+import sys 
 from evoman.environment import Environment
 from demo_controller import player_controller
 
-# imports other libs
 import numpy as np
 import os
 import argparse
 import pickle
-import pandas as pd
 from time import sleep
+from scipy.stats import ttest_ind
 
-# runs simulation
-def simulation(env,x):
-    f, p, e, t = env.play(pcont = x)
+def simulation(env, x):
+    f, p, e, t = env.play(pcont=x)  
     return f, p, e, t
 
-# evaluation
 def evaluate(env, x):
-    return np.array(list(map(lambda y: simulation(env,y), x)))
+    return np.array([simulation(env, individual) for individual in x])
 
 def int2list(enemy_number):
-    s = str(enemy_number)
-    tmp = []
-    for item in s:
-        tmp.append(int(item))
-    return tmp
+    return [int(digit) for digit in str(enemy_number)]
 
+# 随机初始化种群
 def init(n_pop, n_vars):
-    return np.random.normal(0, 1, (n_pop, n_vars))
+    return np.random.uniform(-1, 1, (n_pop, n_vars))
 
-def tournament(pop, fitness):
+def tournament_selection(pop, fitness, k=2):
+    selected_indices = np.random.choice(pop.shape[0], k, replace=False)
+    selected = selected_indices[np.argmax(fitness[selected_indices])]
+    return selected
 
-    p1, p2 = np.random.randint(0, pop.shape[0], size = 2)
-
-    return p1 if fitness[p1] > fitness[p2] else p2
-
-def crossover(env, pop, fitness, p_mutation, selection):
-
-    n_pop = pop.shape[0]
-
-    pop_new = pop
-
-    for i in range(n_pop):
-        if(selection == 'random'):
-            p1, p2 = np.random.randint(0, pop.shape[0], size = 2)
-        elif(selection == 'tournament'):
-            p1, p2 = tournament(pop, fitness), tournament(pop, fitness)
-        elif(selection == 'DE'):
-            while(True):
-                p1, p2 = np.random.randint(0, pop.shape[0], size = 2)
-                if(p1 != i and p2 != i):
-                    break
-
-        alpha = np.random.rand()
-
-        if(selection == 'DE'):
-            x = pop[i]
-            v = pop[p1] - pop[p2]
-            u = x + alpha * v
-            l = [x, u, v]
-            f = evaluate(env, l)[:, 0]
-            offspring = l[np.argmax(f)]
-        else: 
-            offspring = alpha * pop[p1] + (1 - alpha) * pop[p2] + (np.random.rand(pop[p1].shape[0]) if np.random.rand() < p_mutation else 0)
-
-        pop_new = np.vstack((pop_new, offspring))
+def genetic_algorithm(env, n_pop, n_vars, generations, mutation_rate, elitism_size=2):
+    pop = init(n_pop, n_vars)
+    fitness = evaluate(env, pop)[:, 0]
     
-    return pop_new
-
-def select(n_pop, pop, fitness):
-
-    index = np.argpartition(fitness, n_pop)[-n_pop:]
+    best_fitness = []
+    mean_fitness = []
+    std_fitness = []
     
-    return pop[index], fitness[index]
+    for gen in range(generations):
+        elite_indices = fitness.argsort()[-elitism_size:]   # ascending order
+        elites = pop[elite_indices]
+        elite_fitness = fitness[elite_indices]
+        
+        new_pop = list(elites)  
+        
+        while len(new_pop) < n_pop:
+            parent1_idx = tournament_selection(pop, fitness)
+            parent2_idx = tournament_selection(pop, fitness)
+            parent1 = pop[parent1_idx]
+            parent2 = pop[parent2_idx]
+            
+            # Uniform Crossover
+            crossover_mask = np.random.rand(n_vars) < 0.5
+            child = np.where(crossover_mask, parent1, parent2)
+            
+            # Gaussian Mutation
+            mutation_mask = np.random.rand(n_vars) < mutation_rate
+            mutation_strength = 0.1  # TODO: hyperparameter
+            child[mutation_mask] += np.random.normal(0, mutation_strength, np.sum(mutation_mask))
+            child = np.clip(child, -1, 1)
+            
+            new_pop.append(child)
+        
+        pop = np.array(new_pop)
+        fitness = evaluate(env, pop)[:, 0]
+        
+        best_fitness.append(np.max(fitness))
+        mean_fitness.append(np.mean(fitness))
+        std_fitness.append(np.std(fitness))
+        
+        print(f'GA Generation {gen+1}: Best Fitness = {best_fitness[-1]:.4f}, '
+              f'Mean Fitness = {mean_fitness[-1]:.4f}, Std Fitness = {std_fitness[-1]:.4f}')
     
+    return pop, fitness, best_fitness, mean_fitness, std_fitness
 
-def train(enemy_number, Continue, selection, index = 0):
-    # choose this for not using visuals and thus making experiments faster
+def differential_evolution(env, n_pop, n_vars, generations, mutation_factor=0.8, crossover_rate=0.7):
+    pop = init(n_pop, n_vars)
+    fitness = evaluate(env, pop)[:, 0]
+    
+    best_fitness = []
+    mean_fitness = []
+    std_fitness = []
+    
+    for gen in range(generations):
+        for i in range(n_pop):
+            # 时而随机选择基向量，时而选择最佳个体
+            current_strategy = np.random.choice(['rand/1', 'best/1']) 
+            
+            if current_strategy == 'rand/1':
+                # DE/rand/1
+                indices = list(range(n_pop))
+                indices.remove(i)
+                a, b, c = pop[np.random.choice(indices, 3, replace=False)]
+                mutant = a + mutation_factor * (b - c)
+            elif current_strategy == 'best/1':
+                # DE/best/1
+                best_idx = np.argmax(fitness)
+                a = pop[best_idx]
+                indices = list(range(n_pop))
+                indices.remove(best_idx)
+                b, c = pop[np.random.choice(indices, 2, replace=False)]
+                mutant = a + mutation_factor * (b - c)
+            else:
+                raise ValueError("Unsupported DE strategy.")
+ 
+            mutant = np.clip(mutant, -1, 1)
+            
+            # Binomial Crossover
+            crossover_mask = np.random.rand(n_vars) < crossover_rate
+            if not np.any(crossover_mask):
+                crossover_mask[np.random.randint(0, n_vars)] = True  # 确保至少一个基因交叉
+            trial = np.where(crossover_mask, mutant, pop[i])
+            
+            # 选择
+            trial_fitness = evaluate(env, [trial])[0][0]
+            if trial_fitness > fitness[i]:
+                pop[i] = trial
+                fitness[i] = trial_fitness
+    
+        best_fitness.append(np.max(fitness))
+        mean_fitness.append(np.mean(fitness))
+        std_fitness.append(np.std(fitness))
+        
+        print(f'DE Generation {gen+1}: Best Fitness = {best_fitness[-1]:.4f}, '
+              f'Mean Fitness = {mean_fitness[-1]:.4f}, Std Fitness = {std_fitness[-1]:.4f}')
+    
+    return pop, fitness, best_fitness, mean_fitness, std_fitness
+
+def calculate_gain(env, best_individual):
+    _, player_hp, enemy_hp, _ = env.play(pcont=best_individual)
+    gain = player_hp - enemy_hp
+    return gain
+
+def train(enemy_number, algorithm, run, n_pop, generations, mutation_rate, mutation_factor, crossover_rate):
     headless = True
     if headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
-        
-    experiment_name = 'solution/' + str(enemy_number)
-    if not os.path.exists(experiment_name):
-        os.makedirs(experiment_name)
-
+    
+    experiment_name = f'solution/{enemy_number}/{algorithm}/run{run}'
+    os.makedirs(experiment_name, exist_ok=True)
+    
     n_hidden_neurons = 10
+    
+    env = Environment(
+        experiment_name=experiment_name,
+        enemies=[enemy_number],
+        playermode="ai",
+        player_controller=player_controller(n_hidden_neurons),
+        enemymode="static",
+        level=2,
+        speed="fastest",
+        visuals=False
+    )
+    
+    num_sensors = env.get_num_sensors()
+    n_vars = (num_sensors + 1) * n_hidden_neurons + (n_hidden_neurons + 1) * 5
+    print(f'Enemy {enemy_number}: num_sensors={num_sensors}, n_vars={n_vars}')
+    print(f'Population shape: {init(n_pop, n_vars).shape}')
 
-    # initializes simulation in individual evolution mode, for single static enemy.
-    env = Environment(experiment_name = experiment_name,
-                    enemies = int2list(enemy_number),
-                    playermode = "ai",
-                    player_controller = player_controller(n_hidden_neurons), # you can insert your own controller here
-                    enemymode = "static",
-                    level = 2,
-                    speed = "fastest",
-                    visuals = False,
-                    multiplemode = 'yes')
-
-    # number of weights for multilayer with 10 hidden neurons
-    n_vars = (env.get_num_sensors() + 1) * n_hidden_neurons + (n_hidden_neurons + 1) * 5
-    n_pop = 100
-    p_mutation = 0.2
-    epoch = 100
-    best_f = -1
-
-    if(os.path.exists(experiment_name + '/pop_{}.bin'.format(index)) and Continue):
-        pop = np.fromfile(experiment_name + '/pop_{}.bin'.format(index), dtype = np.float64).reshape(n_pop, n_vars)
-        results = evaluate(env, pop)
-        fitness, player_hp, enemy_hp, time = results[:, 0], results[:, 1], results[:, 2], results[:, 3]        
-        best_f = np.max(fitness)
-        print('best_f {}'.format(best_f))
-        sleep(1)
+    if algorithm == 'GA':
+        pop, fitness, best_f, mean_f, std_f = genetic_algorithm(
+            env, n_pop, n_vars, generations, mutation_rate
+        )
+    elif algorithm == 'DE':
+        pop, fitness, best_f, mean_f, std_f = differential_evolution(
+            env, n_pop, n_vars, generations, mutation_factor, crossover_rate
+        )
     else:
-        pop = init(n_pop, n_vars)
-        results = evaluate(env, pop)
-        fitness, player_hp, enemy_hp, time = results[:, 0], results[:, 1], results[:, 2], results[:, 3]        
-        print("training from scratch")
-        sleep(1)
-
-    data_fitness = {'mean': np.array([]), 'std': np.array([]), 'max': np.array([])}
-    data_player_hp = {'mean': np.array([]), 'std': np.array([]), 'max': np.array([])}
-    data_enemy_hp = {'mean': np.array([]), 'std': np.array([]), 'max': np.array([])}
-    data_time = {'mean': np.array([]), 'std': np.array([]), 'max': np.array([])}
-    for i in range(epoch):
-        # data collection
-        # mean
-        results = evaluate(env, pop)
-        fitness, player_hp, enemy_hp, time = results[:, 0], results[:, 1], results[:, 2], results[:, 3]  
-        data_fitness['mean'] = np.append(data_fitness['mean'], np.mean(fitness))
-        data_player_hp['mean'] = np.append(data_player_hp['mean'], np.mean(player_hp))
-        data_enemy_hp['mean'] = np.append(data_enemy_hp['mean'], np.mean(enemy_hp))
-        data_time['mean'] = np.append(data_time['mean'], np.mean(time))
-        
-        # std
-        data_fitness['std'] = np.append(data_fitness['std'], np.std(fitness))
-        data_player_hp['std'] = np.append(data_player_hp['std'], np.std(player_hp))
-        data_enemy_hp['std'] = np.append(data_enemy_hp['std'], np.std(enemy_hp))
-        data_time['std'] = np.append(data_time['std'], np.std(time))
-
-        # max
-        data_fitness['max'] = np.append(data_fitness['max'], np.max(fitness))
-        data_player_hp['max'] = np.append(data_player_hp['max'], np.max(player_hp))
-        data_enemy_hp['max'] = np.append(data_enemy_hp['max'], np.max(enemy_hp))
-        data_time['max'] = np.append(data_time['max'], np.max(time))
-
-        pop = crossover(env, pop, fitness, p_mutation, selection)
-        results = evaluate(env, pop)
-        fitness, player_hp, enemy_hp, time = results[:, 0], results[:, 1], results[:, 2], results[:, 3]        
-        pop, fitness = select(n_pop, pop, fitness)
-
-        index_best = np.argmax(fitness)
-        pop_best = pop[index_best]
-        fitness_best = fitness[index_best]
-
-        # import pdb; pdb.set_trace()
-
-        print('epoch {} best fitness {}'.format(i, fitness_best))
-
-        if(fitness_best > best_f):
-            print('best solution saved to {}/best_{}.bin and {}/pop_{}.bin'.format(experiment_name, index, experiment_name, index))
-            pop_best.tofile(experiment_name + '/best_{}.bin'.format(index))
-            pop.tofile(experiment_name + '/pop_{}.bin'.format(index))
-            best_f = fitness_best
+        raise ValueError("Unsupported algorithm type.")
     
-    return data_fitness, data_player_hp, data_enemy_hp, data_time
+    best_idx = np.argmax(fitness)
+    best_individual = pop[best_idx]
+    np.save(os.path.join(experiment_name, 'best_individual.npy'), best_individual)
+    
+    # 计算并打印最终的gain
+    final_gain = calculate_gain(env, best_individual)
+    print(f'{algorithm} on Enemy {enemy_number}, Run {run}')
+    print(f'{algorithm} Generation {generations}: Best Fitness = {best_f[-1]:.4f}, '
+          f'Mean Fitness = {mean_f[-1]:.4f}, Std Fitness = {std_f[-1]:.4f}, '
+          f'Gain = {final_gain}')
+    
+    return best_f, mean_f, std_f, final_gain
 
-
-def test(enemy_number, index = 0):
-    # choose this for not using visuals and thus making experiments faster
+def test(enemy_number, algorithm, run):
+    print(f"Testing with algorithm: {algorithm} (Run {run})")
     headless = True
     if headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
-
-    n_hidden_neurons = 10
-
-    experiment_name = 'solution/' + str(enemy_number)
-    # initializes simulation in individual evolution mode, for single static enemy.
-    env = Environment(experiment_name = experiment_name,
-                    enemies = int2list(enemy_number),
-                    playermode = "ai",
-                    player_controller = player_controller(n_hidden_neurons), # you can insert your own controller here
-                    enemymode = "static",
-                    level = 2,
-                    speed = "normal",
-                    visuals = False,
-                    multiplemode = 'yes')
-
-    # number of weights for multilayer with 10 hidden neurons
-    n_vars = (env.get_num_sensors() + 1) * n_hidden_neurons + (n_hidden_neurons + 1) * 5
-
-    pop = np.fromfile(experiment_name + '/best_{}.bin'.format(index), dtype = np.float64).reshape(1, n_vars)
     
-    results = evaluate(env, pop)[0]
-    fitness, player_hp, enemy_hp, time = results[0], results[1], results[2], results[3]
+    experiment_name = f'solution/{enemy_number}/{algorithm}/run{run}'
+    
+    env = Environment(
+        experiment_name=experiment_name,
+        enemies=[enemy_number],
+        playermode="ai",
+        player_controller=player_controller(n_hidden_neurons=10),
+        enemymode="static",
+        level=2,
+        speed="fastest",
+        visuals=False
+    )
+    
+    num_sensors = env.get_num_sensors()
+    n_hidden_neurons = 10
+    n_vars = (num_sensors + 1) * n_hidden_neurons + (n_hidden_neurons + 1) * 5
+    print(f'Enemy {enemy_number}: num_sensors={num_sensors}, n_vars={n_vars}')
+   
+    best_individual_path = os.path.join(experiment_name, 'best_individual.npy')
+    if not os.path.exists(best_individual_path):
+        print(f'Best individual not found for {algorithm} on Enemy {enemy_number}, Run {run}')
+        return None
+    
+    best_individual = np.load(best_individual_path)
+    print(f'Best individual shape: {best_individual.shape}')
+    
+    gain = calculate_gain(env, best_individual)
+    
+    print(f'Test Run {run} for {algorithm} on Enemy {enemy_number}: Gain = {gain}')
+    
+    return gain
 
-    print('fitness {}, player_hp {}, enemy_hp {}, time {}'.format(fitness, player_hp, enemy_hp, time))
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-m', '--mode', type=str, default='train', help='Mode: train, test, or full')
+    parser.add_argument('-n', '--enemy_number', type=int, default=1, help='Enemy number (e.g., 1, 2, 3)')
+    parser.add_argument('-a', '--algorithm', type=str, default='GA', choices=['GA', 'DE'], help='Algorithm: GA or DE')
+    parser.add_argument('-r', '--runs', type=int, default=1, help='Number of runs per algorithm per enemy')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed')
+    args = parser.parse_args()
+    
+    np.random.seed(args.seed)
+    
+    enemies = [1,2,3]
+    algorithms = ['GA', 'DE']     
+    n_runs = args.runs
+    generations = 30
+    n_pop = 100
+    mutation_rate = 0.2  
+    mutation_factor = 0.8 
+    crossover_rate = 0.7 
 
-    return player_hp - enemy_hp
+    results = {
+        'GA': {enemy: {'best_fitness': [], 'mean_fitness': [], 'std_fitness': [], 'gain': []} for enemy in enemies},
+        'DE': {enemy: {'best_fitness': [], 'mean_fitness': [], 'std_fitness': [], 'gain': []} for enemy in enemies}
+    }
+
+    if args.mode in ['train', 'full']:
+        for algorithm in algorithms:
+            for enemy in enemies:
+                for run in range(1, n_runs + 1):
+                    print(f'\n=== Training {algorithm} on Enemy {enemy}, Run {run} ===\n')
+                    best_f, mean_f, std_f, gain = train(
+                        enemy_number=enemy,
+                        algorithm=algorithm,
+                        run=run,
+                        n_pop=n_pop,
+                        generations=generations,
+                        mutation_rate=mutation_rate,
+                        mutation_factor=mutation_factor,
+                        crossover_rate=crossover_rate
+                    )
+                    # 记录结果
+                    results[algorithm][enemy]['best_fitness'].append(best_f[-1])
+                    results[algorithm][enemy]['mean_fitness'].append(mean_f[-1])
+                    results[algorithm][enemy]['std_fitness'].append(std_f[-1])
+                    results[algorithm][enemy]['gain'].append(gain)
+        if args.mode == 'train':
+            print('\n=== Training Completed ===\n')
+    
+    if args.mode in ['test', 'full']:
+        for algorithm in algorithms:
+            for enemy in enemies:
+                for run in range(1, n_runs + 1):
+                    print(f'\n=== Testing {algorithm} on Enemy {enemy}, Run {run} ===\n')
+                    gain = test(
+                        enemy_number=enemy,
+                        algorithm=algorithm,
+                        run=run
+                    )
+        if args.mode == 'test':
+            print('\n=== Testing Completed ===\n')
+    
+    if args.mode == 'full':
+        print('\n=== Full Process Completed ===\n')
+    
+    if args.mode in ['train', 'full']:
+        print("\n=== Summary of Results ===\n")
+        summary = {
+            'GA': {'best_fitness': [], 'mean_fitness': [], 'gain': []},
+            'DE': {'best_fitness': [], 'mean_fitness': [], 'gain': []}
+        }
+        
+        for algorithm in algorithms:
+            print(f"--- Algorithm: {algorithm} ---")
+            for enemy in enemies:
+                best_avg = np.mean(results[algorithm][enemy]['best_fitness'])
+                mean_avg = np.mean(results[algorithm][enemy]['mean_fitness'])
+                std_avg = np.mean(results[algorithm][enemy]['std_fitness'])
+                gain_avg = np.mean(results[algorithm][enemy]['gain'])
+                summary[algorithm]['best_fitness'].append(best_avg)
+                summary[algorithm]['mean_fitness'].append(mean_avg)
+                summary[algorithm]['gain'].append(gain_avg)
+                print(f"Enemy {enemy}: Best Fitness Avg = {best_avg:.4f}, Mean Fitness Avg = {mean_avg:.4f}, "
+                      f"Std Fitness Avg = {std_avg:.4f}, Gain Avg = {gain_avg:.4f}")
+            print("\n")
 
 if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-m', '--mode', type = str, default = 'train')
-    parser.add_argument('-n', '--enemy_number', type = int, default = 1)
-    parser.add_argument('-c', '--Continue', action = 'store_true')
-    parser.add_argument('-s', '--seed', type = int, default = 0)
-    parser.add_argument('--selection', type = str, default = 'random')
-    
-    args = parser.parse_args()
-
-    if(args.mode == 'train'):
-        train(args.enemy_number, args.Continue, args.selection)
-    elif(args.mode == 'test'):
-        test(args.enemy_number)
-    elif(args.mode == 'data'):
-        experiment_name = 'solution/' + str(args.enemy_number)
-
-        f = np.array([])
-        p = np.array([])
-        e = np.array([])
-        t = np.array([])
-        for i in range(10):
-            data_f, data_p, data_e, data_t = train(args.enemy_number, False, args.selection, i)
-            f = np.append(f, data_f)
-            p = np.append(p, data_p)
-            e = np.append(e, data_e)
-            t = np.append(t, data_t)
-        
-        with open(experiment_name + '/data_f.pkl', 'wb') as file:
-            pickle.dump(f, file)
-
-    elif(args.mode == 'data_test'):
-        data = {'score': []}
-        for i in range(10):
-            score = test(args.enemy_number, i)
-            data['score'].append(score)
-        
-        experiment_name = 'solution/' + str(args.enemy_number)
-        with open(experiment_name + '/data_score.pkl', 'wb') as file:
-            pickle.dump(data, file)
-
-
+    main()
