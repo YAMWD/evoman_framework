@@ -240,8 +240,8 @@ def main():
     crossover_rate = 0.7 
 
     results = {
-        'GA': {enemy: {'best_fitness': [], 'mean_fitness': [], 'std_fitness': [], 'gain': []} for enemy in enemies},
-        'DE': {enemy: {'best_fitness': [], 'mean_fitness': [], 'std_fitness': [], 'gain': []} for enemy in enemies}
+        'GA': {enemy: {'best_fitness': {}, 'mean_fitness': {}, 'std_fitness': {}, 'gain': {}} for enemy in enemies},
+        'DE': {enemy: {'best_fitness': {}, 'mean_fitness': {}, 'std_fitness': {}, 'gain': {}} for enemy in enemies}
     }
 
     if args.mode in ['train', 'full']:
@@ -260,10 +260,25 @@ def main():
                         crossover_rate=crossover_rate
                     )
                     # 记录结果
-                    results[algorithm][enemy]['best_fitness'].append(best_f[-1])
-                    results[algorithm][enemy]['mean_fitness'].append(mean_f[-1])
-                    results[algorithm][enemy]['std_fitness'].append(std_f[-1])
-                    results[algorithm][enemy]['gain'].append(gain)
+                    if run not in results[algorithm][enemy]['best_fitness'].keys():
+                        results[algorithm][enemy]['best_fitness'][run] = []
+
+                    if run not in results[algorithm][enemy]['mean_fitness'].keys():
+                        results[algorithm][enemy]['mean_fitness'][run] = []
+
+                    if run not in results[algorithm][enemy]['std_fitness'].keys():
+                        results[algorithm][enemy]['std_fitness'][run] = []
+    
+                    results[algorithm][enemy]['best_fitness'][run].extend(best_f)
+                    results[algorithm][enemy]['mean_fitness'][run].extend(mean_f)
+                    results[algorithm][enemy]['std_fitness'][run].extend(std_f)
+                    # results[algorithm][enemy]['gain'].append(gain)
+        
+        with open('solution/avg/data_f.pkl', 'wb') as file:
+            pickle.dump(results, file)
+            
+        import pdb; pdb.set_trace()
+        
         if args.mode == 'train':
             print('\n=== Training Completed ===\n')
     
@@ -283,6 +298,7 @@ def main():
     if args.mode == 'full':
         print('\n=== Full Process Completed ===\n')
     
+    '''
     if args.mode in ['train', 'full']:
         print("\n=== Summary of Results ===\n")
         summary = {
@@ -303,6 +319,7 @@ def main():
                 print(f"Enemy {enemy}: Best Fitness Avg = {best_avg:.4f}, Mean Fitness Avg = {mean_avg:.4f}, "
                       f"Std Fitness Avg = {std_avg:.4f}, Gain Avg = {gain_avg:.4f}")
             print("\n")
-
+    '''
+    
 if __name__ == '__main__':
     main()
