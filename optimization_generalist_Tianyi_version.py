@@ -151,9 +151,12 @@ def DEMO(env, multi_test_env, n_pop, n_vars, generations, mutation_factor=0.8, c
             else:
                 raise ValueError("Unsupported DE strategy.")
              
+            mutant = np.clip(mutant, -1, 1)
+
             crossover_mask = np.random.rand(n_vars) < crossover_rate
             if not np.any(crossover_mask):
                 crossover_mask[np.random.randint(0, n_vars)] = True
+            
             trial = np.where(crossover_mask, mutant, a)
             
             trial_fitness, a_fitness = multi_evaluate(multi_test_env, [trial, a])[:, :, 0]
@@ -270,7 +273,7 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
         enemymode="static",
         level=2,
         speed="fastest",
-        visuals=False) for i in range(1, 9)
+        visuals=False) for i in enemy_group
     ]
 
     num_sensors = env.get_num_sensors()
