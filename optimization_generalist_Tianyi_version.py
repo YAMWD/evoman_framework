@@ -6,6 +6,8 @@ import numpy as np
 import os
 import argparse
 import pickle
+from itertools import combinations
+from deap import base, creator, tools, algorithms
 
 def simulation(env, x):
     f, p, e, t = env.play(pcont=x)  
@@ -14,10 +16,6 @@ def simulation(env, x):
 def evaluate(env, x):
     return np.array([simulation(env, individual) for individual in x])
 
-def int2list(enemy_number):
-    return [int(digit) for digit in str(enemy_number)]
-
-# 随机初始化种群
 def init(n_pop, n_vars):
     return np.random.uniform(-1, 1, (n_pop, n_vars))
 
@@ -35,9 +33,8 @@ def genetic_algorithm(env, n_pop, n_vars, generations, mutation_rate, elitism_si
     std_fitness = []
     
     for gen in range(generations):
-        elite_indices = fitness.argsort()[-elitism_size:]   # ascending order
+        elite_indices = fitness.argsort()[-elitism_size:]
         elites = pop[elite_indices]
-        elite_fitness = fitness[elite_indices]
         
         new_pop = list(elites)  
         
@@ -47,13 +44,11 @@ def genetic_algorithm(env, n_pop, n_vars, generations, mutation_rate, elitism_si
             parent1 = pop[parent1_idx]
             parent2 = pop[parent2_idx]
             
-            # Uniform Crossover
             crossover_mask = np.random.rand(n_vars) < 0.5
             child = np.where(crossover_mask, parent1, parent2)
             
-            # Gaussian Mutation
             mutation_mask = np.random.rand(n_vars) < mutation_rate
-            mutation_strength = 0.3  # TODO: hyperparameter
+            mutation_strength = 0.3
             child[mutation_mask] += np.random.normal(0, mutation_strength, np.sum(mutation_mask))
             child = np.clip(child, -1, 1)
             
@@ -81,17 +76,14 @@ def differential_evolution(env, n_pop, n_vars, generations, mutation_factor=0.8,
     
     for gen in range(generations):
         for i in range(n_pop):
-            # 时而随机选择基向量，时而选择最佳个体
             current_strategy = np.random.choice(['rand/1', 'best/1']) 
             
             if current_strategy == 'rand/1':
-                # DE/rand/1
                 indices = list(range(n_pop))
                 indices.remove(i)
                 a, b, c = pop[np.random.choice(indices, 3, replace=False)]
                 mutant = a + mutation_factor * (b - c)
             elif current_strategy == 'best/1':
-                # DE/best/1
                 best_idx = np.argmax(fitness)
                 a = pop[best_idx]
                 indices = list(range(n_pop))
@@ -103,13 +95,11 @@ def differential_evolution(env, n_pop, n_vars, generations, mutation_factor=0.8,
  
             mutant = np.clip(mutant, -1, 1)
             
-            # Binomial Crossover
             crossover_mask = np.random.rand(n_vars) < crossover_rate
             if not np.any(crossover_mask):
-                crossover_mask[np.random.randint(0, n_vars)] = True  # 确保至少一个基因交叉
+                crossover_mask[np.random.randint(0, n_vars)] = True
             trial = np.where(crossover_mask, mutant, pop[i])
             
-            # 选择
             trial_fitness = evaluate(env, [trial])[0][0]
             if trial_fitness > fitness[i]:
                 pop[i] = trial
@@ -129,20 +119,73 @@ def calculate_gain(env, best_individual):
     gain = player_hp - enemy_hp
     return gain
 
-def train(enemy_number, algorithm, run, n_pop, generations, mutation_rate, mutation_factor, crossover_rate):
+def evaluate_individual(env, individual):
+    f, p, e, t = env.play(pcont=individual)
+    return f, p, -e  # 返回适应度、玩家生命值和敌人生命值的负值
+
+def nsga2(env, n_pop, n_vars, generations, mutation_rate, crossover_rate):
+    creator.create("FitnessMulti", base.Fitness, weights=(1.0, 1.0, 1.0))
+    creator.create("Individual", np.ndarray, fitness=creator.FitnessMulti)
+
+    toolbox = base.Toolbox()
+    toolbox.register("attr_float", np.random.uniform, -1, 1)
+    toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=n_vars)
+    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+
+    toolbox.register("evaluate", evaluate_individual, env)
+    toolbox.register("mate", tools.cxBlend, alpha=0.5)
+    toolbox.register("mutate", tools.mutGaussian, mu=0, sigma=1, indpb=mutation_rate)
+    toolbox.register("select", tools.selNSGA2)
+
+    pop = toolbox.population(n=n_pop)
+    
+    stats = tools.Statistics(lambda ind: ind.fitness.values)
+    stats.register("avg", np.mean, axis=0)
+    stats.register("std", np.std, axis=0)
+    stats.register("min", np.min, axis=0)
+    stats.register("max", np.max, axis=0)
+
+    logbook = tools.Logbook()
+    logbook.header = "gen", "evals", "std", "min", "avg", "max"
+
+    # 评估初始种群
+    fitnesses = toolbox.map(toolbox.evaluate, pop)
+    for ind, fit in zip(pop, fitnesses):
+        ind.fitness.values = fit
+
+    for gen in range(generations):
+        offspring = algorithms.varAnd(pop, toolbox, cxpb=crossover_rate, mutpb=mutation_rate)
+        
+        # 评估后代
+        fitnesses = toolbox.map(toolbox.evaluate, offspring)
+        for ind, fit in zip(offspring, fitnesses):
+            ind.fitness.values = fit
+        
+        # 选择下一代
+        pop = toolbox.select(pop + offspring, k=len(pop))
+        
+        # 记录统计信息
+        record = stats.compile(pop)
+        logbook.record(gen=gen, evals=len(offspring), **record)
+        print(f"Generation {gen}: {record}")
+
+    return pop, logbook
+
+def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutation_factor, crossover_rate):
     headless = True
     if headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
     
-    experiment_name = f'solution_general/{enemy_number}/{algorithm}/run{run}'
+    enemy_group_str = '-'.join(map(str, enemy_group))
+    experiment_name = f'solution_general/{enemy_group_str}/{algorithm}/run{run}'
     os.makedirs(experiment_name, exist_ok=True)
     
     n_hidden_neurons = 10
     
     env = Environment(
         experiment_name=experiment_name,
-        enemies=enemy_number,
-        multiplemode="yes",  # generalist
+        enemies=enemy_group,
+        multiplemode="yes",
         playermode="ai",
         player_controller=player_controller(n_hidden_neurons),
         enemymode="static",
@@ -153,46 +196,44 @@ def train(enemy_number, algorithm, run, n_pop, generations, mutation_rate, mutat
     
     num_sensors = env.get_num_sensors()
     n_vars = (num_sensors + 1) * n_hidden_neurons + (n_hidden_neurons + 1) * 5
-    print(f'Enemy {enemy_number}: num_sensors={num_sensors}, n_vars={n_vars}')
+    print(f'Enemy Group {enemy_group_str}: num_sensors={num_sensors}, n_vars={n_vars}')
     print(f'Population shape: {init(n_pop, n_vars).shape}')
 
-    if algorithm == 'GA':
-        pop, fitness, best_f, mean_f, std_f = genetic_algorithm(
-            env, n_pop, n_vars, generations, mutation_rate
+    if algorithm == 'NSGA2':
+        pop, logbook = nsga2(
+            env, n_pop, n_vars, generations, mutation_rate, crossover_rate
         )
+        best_individual = tools.selBest(pop, k=1)[0]
+        final_fitness = best_individual.fitness.values[0]  # 获取最后一代的最佳适应度
     elif algorithm == 'DE':
         pop, fitness, best_f, mean_f, std_f = differential_evolution(
             env, n_pop, n_vars, generations, mutation_factor, crossover_rate
         )
+        best_individual = pop[np.argmax(fitness)]
+        final_fitness = np.max(fitness)  # 获取最后一代的最佳适应度
     else:
         raise ValueError("Unsupported algorithm type.")
     
-    best_idx = np.argmax(fitness)
-    best_individual = pop[best_idx]
     np.save(os.path.join(experiment_name, 'best_individual.npy'), best_individual)
     
-    # 计算并打印最终的gain
     final_gain = calculate_gain(env, best_individual)
-    print(f'{algorithm} on Enemy {enemy_number}, Run {run}')
-    print(f'{algorithm} Generation {generations}: Best Fitness = {best_f[-1]:.4f}, '
-          f'Mean Fitness = {mean_f[-1]:.4f}, Std Fitness = {std_f[-1]:.4f}, '
-          f'Gain = {final_gain}')
     
-    return best_f, mean_f, std_f, final_gain
+    return final_fitness, final_gain
 
-def test(enemy_number, algorithm, run):
-    print(f"Testing with algorithm: {algorithm} (Run {run})")
+def test(enemy_group, algorithm, run):
+    enemy_group_str = '-'.join(map(str, enemy_group))
+    print(f"Testing with algorithm: {algorithm} (Run {run}) for Enemy Group: {enemy_group_str}")
     headless = True
     if headless:
         os.environ["SDL_VIDEODRIVER"] = "dummy"
     
-    experiment_name = f'solution_general/{enemy_number}/{algorithm}/run{run}'
+    experiment_name = f'solution_general/{enemy_group_str}/{algorithm}/run{run}'
     
     n_hidden_neurons = 10
     env = Environment(
         experiment_name=experiment_name,
-        enemies=[1,2,3,4,5,6,7,8],
-        multiplemode="yes",  # generalist
+        enemies=enemy_group,
+        multiplemode="yes",
         playermode="ai",
         player_controller=player_controller(n_hidden_neurons),
         enemymode="static",
@@ -202,13 +243,12 @@ def test(enemy_number, algorithm, run):
     )
     
     num_sensors = env.get_num_sensors()
-    n_hidden_neurons = 10
     n_vars = (num_sensors + 1) * n_hidden_neurons + (n_hidden_neurons + 1) * 5
-    print(f'Enemy {enemy_number}: num_sensors={num_sensors}, n_vars={n_vars}')
+    print(f'Enemy Group {enemy_group_str}: num_sensors={num_sensors}, n_vars={n_vars}')
    
     best_individual_path = os.path.join(experiment_name, 'best_individual.npy')
     if not os.path.exists(best_individual_path):
-        print(f'Best individual not found for {algorithm} on Enemy {enemy_number}, Run {run}')
+        print(f'Best individual not found for {algorithm} on Enemy Group {enemy_group_str}, Run {run}')
         return None
     
     best_individual = np.load(best_individual_path)
@@ -216,47 +256,35 @@ def test(enemy_number, algorithm, run):
     
     gain = calculate_gain(env, best_individual)
     
-    print(f'Test Run {run} for {algorithm} on All Enemy: Gain = {gain}')
+    print(f'Test Run {run} for {algorithm} on Enemy Group {enemy_group_str}: Gain = {gain}')
     
     return gain
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('-m', '--mode', type=str, default='train', help='Mode: train, test, or full')
-    parser.add_argument('-n', '--enemy_number', type=int, default=1, help='Enemy number (e.g., 1, 2, 3)')
-    parser.add_argument('-a', '--algorithm', type=str, default='GA', choices=['GA', 'DE'], help='Algorithm: GA or DE')
-    parser.add_argument('-r', '--runs', type=int, default=1, help='Number of runs per algorithm per enemy')
+    parser.add_argument('-m', '--mode', type=str, default='train', help='Mode: train or test')
+    parser.add_argument('-a', '--algorithm', type=str, default='NSGA2', choices=['DE', 'NSGA2'], help='Algorithm: DE or NSGA2')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
     args = parser.parse_args()
     np.random.seed(args.seed)
     
-    #enemies = args.enemy_number
-    enemies = [3,4,6]  # todo
-    algorithms = ["GA"]
+    enemy_groups = [(1,3,4), (1,5,6), (1,7,8), (2,3,4), (2,5,6), (2,7,8)]
+    algorithms = ["NSGA2", "DE"]
 
-    n_runs = args.runs
     generations = 30
-    n_pop = 200
-    mutation_rate = 0.2  # BEST FOR GA
-    mutation_factor = 0.5  # BEST FOR DE
-    crossover_rate = 0.6  # BEST FOR DE
+    n_pop = 100
+    mutation_rate = 0.2
+    mutation_factor = 0.5
+    crossover_rate = 0.6
 
-    results = {
-#        'GA': {enemy: {'best_fitness': {}, 'mean_fitness': {}, 'std_fitness': {}, 'gain': {}} for enemy in enemies},
-#        'DE': {enemy: {'best_fitness': {}, 'mean_fitness': {}, 'std_fitness': {}, 'gain': {}} for enemy in enemies}
-#    }
-    'GA':  {'best_fitness': {}, 'mean_fitness': {}, 'std_fitness': {}, 'gain': {}},
-    'DE':  {'best_fitness': {}, 'mean_fitness': {}, 'std_fitness': {}, 'gain': {}}
-    }
-
-    if args.mode in ['train', 'full']:
+    if args.mode == 'train':
+        print("Algorithm\tEnemy Group\tFinal Fitness\tFinal Gain")
         for algorithm in algorithms:
-            for run in range(1, n_runs + 1):
-                print(f'\n=== Training {algorithm} on Enemy {enemies}, Run {run} ===\n')
-                best_f, mean_f, std_f, gain = train(
-                    enemy_number=enemies,
+            for enemy_group in enemy_groups:
+                final_fitness, final_gain = train(
+                    enemy_group=enemy_group,
                     algorithm=algorithm,
-                    run=run,
+                    run=1,
                     n_pop=n_pop,
                     generations=generations,
                     mutation_rate=mutation_rate,
@@ -264,67 +292,24 @@ def main():
                     crossover_rate=crossover_rate
                 )
 
-                if run not in results[algorithm]['best_fitness'].keys():
-                    results[algorithm]['best_fitness'][run] = []
-                if run not in results[algorithm]['mean_fitness'].keys():
-                    results[algorithm]['mean_fitness'][run] = []
-                if run not in results[algorithm]['std_fitness'].keys():
-                    results[algorithm]['std_fitness'][run] = []
+                enemy_group_str = '-'.join(map(str, enemy_group))
+                print(f"{algorithm}\t{enemy_group_str}\t{final_fitness:.4f}\t{final_gain:.4f}")
 
-                results[algorithm]['best_fitness'][run].extend(best_f)
-                results[algorithm]['mean_fitness'][run].extend(mean_f)
-                results[algorithm]['std_fitness'][run].extend(std_f)
+        print('\n=== Training Completed ===\n')
 
-        save_name = f'solution_general/avg/{algorithm}'
-        os.makedirs(save_name, exist_ok=True)        
-        with open(f'{save_name}/data_f.pkl', 'wb') as file:
-            pickle.dump(results, file)
+    elif args.mode == 'test':
+        print("Algorithm\tEnemy Group\tTest Gain")
+        for enemy_group in enemy_groups:
+            for algorithm in algorithms:
+                gain = test(
+                    enemy_group=enemy_group,
+                    algorithm=algorithm,
+                    run=1
+                )
+                enemy_group_str = '-'.join(map(str, enemy_group))
+                print(f"{algorithm}\t{enemy_group_str}\t{gain:.4f}")
 
-        if args.mode == 'train':
-            print('\n=== Training Completed ===\n')
+        print('\n=== Testing Completed ===\n')
 
-    if args.mode in ['test', 'full']:
-        with open('Task2_score.txt', 'a') as file:
-            for run in range(10):
-                gain_single = []
-                for algorithm in ['DE','GA']:
-                     for i in range(5):  # 5 repeats for each independent run
-                         print(f'\n=== Testing {algorithm} on All Enemy, Run {run+1} ===\n')
-                         gain = test(
-                             enemy_number=enemies,
-                             algorithm=algorithm,
-                              run=run+1
-                            )
-                         gain_single.append(gain)
-                     file.write(f"{round(sum(gain_single)/5,3)}\t{enemies}\t{algorithm}\n")
-#        if args.mode == 'test':
-#            print('\n=== Testing Completed ===\n')
-    
-    if args.mode == 'full':
-        print('\n=== Full Process Completed ===\n')
-    
-    '''
-    if args.mode in ['train', 'full']:
-        print("\n=== Summary of Results ===\n")
-        summary = {
-            'GA': {'best_fitness': [], 'mean_fitness': [], 'gain': []},
-            'DE': {'best_fitness': [], 'mean_fitness': [], 'gain': []}
-        }
-        
-        for algorithm in algorithms:
-            print(f"--- Algorithm: {algorithm} ---")
-            for enemy in enemies:
-                best_avg = np.mean(results[algorithm][enemy]['best_fitness'])
-                mean_avg = np.mean(results[algorithm][enemy]['mean_fitness'])
-                std_avg = np.mean(results[algorithm][enemy]['std_fitness'])
-                gain_avg = np.mean(results[algorithm][enemy]['gain'])
-                summary[algorithm]['best_fitness'].append(best_avg)
-                summary[algorithm]['mean_fitness'].append(mean_avg)
-                summary[algorithm]['gain'].append(gain_avg)
-                print(f"Enemy {enemy}: Best Fitness Avg = {best_avg:.4f}, Mean Fitness Avg = {mean_avg:.4f}, "
-                      f"Std Fitness Avg = {std_avg:.4f}, Gain Avg = {gain_avg:.4f}")
-            print("\n")
-    '''
-    
 if __name__ == '__main__':
     main()
