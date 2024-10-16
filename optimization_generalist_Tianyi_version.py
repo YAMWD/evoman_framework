@@ -16,11 +16,93 @@ def simulation(env, x):
 def evaluate(env, x):
     return np.array([simulation(env, individual) for individual in x])
 
-def multi_evaluate(multi_env, x):
-    res = []
+def multi_evaluate(multi_envs, x):
+    fitness_values = []
     for individual in x:
-        res.append(np.array([simulation(env, individual) for env in multi_env]))
-    return np.array(res)
+        # Evaluate individual on all environments
+        individual_fitness = []
+        for env in multi_envs:
+            f, _, _, _ = simulation(env, individual)
+            individual_fitness.append(f)
+        fitness_values.append(individual_fitness)
+    fitness_values = np.array(fitness_values)
+    if fitness_values.ndim == 1:
+        fitness_values = fitness_values[:, np.newaxis]
+    return fitness_values  # Shape: (n_individuals, n_objectives)
+
+def dominates(fitness_a, fitness_b):
+    return np.all(fitness_a >= fitness_b) and np.any(fitness_a > fitness_b)
+
+def is_dominated_by(fitness_a, fitness_b):
+    return np.all(fitness_a <= fitness_b) and np.any(fitness_a < fitness_b)
+
+def non_dominated_sorting(fitnesses):
+    fronts = []
+    domination_counts = np.zeros(len(fitnesses), dtype=int)
+    dominated_solutions = [[] for _ in range(len(fitnesses))]
+    ranks = np.zeros(len(fitnesses), dtype=int)
+
+    for p in range(len(fitnesses)):
+        for q in range(len(fitnesses)):
+            if dominates(fitnesses[p], fitnesses[q]):
+                dominated_solutions[p].append(q)
+            elif dominates(fitnesses[q], fitnesses[p]):
+                domination_counts[p] += 1
+        if domination_counts[p] == 0:
+            ranks[p] = 0
+            if len(fronts) == 0:
+                fronts.append([])
+            fronts[0].append(p)
+    
+    i = 0
+    while len(fronts[i]) > 0:
+        next_front = []
+        for p in fronts[i]:
+            for q in dominated_solutions[p]:
+                domination_counts[q] -= 1
+                if domination_counts[q] == 0:
+                    ranks[q] = i + 1
+                    next_front.append(q)
+        i += 1
+        fronts.append(next_front)
+    return fronts[:-1], ranks
+
+def calculate_crowding_distance(fitnesses, front_indices):
+    distances = np.zeros(len(front_indices))
+    num_objectives = fitnesses.shape[1]
+    front_fitnesses = fitnesses[front_indices]
+
+    for m in range(num_objectives):
+        sorted_indices = np.argsort(front_fitnesses[:, m])
+        sorted_fitnesses = front_fitnesses[sorted_indices, m]
+        distances[sorted_indices[0]] = distances[sorted_indices[-1]] = np.inf
+        f_max = sorted_fitnesses[-1]
+        f_min = sorted_fitnesses[0]
+        if f_max - f_min == 0:
+            continue
+        for i in range(1, len(front_indices) - 1):
+            distances[sorted_indices[i]] += (
+                (sorted_fitnesses[i + 1] - sorted_fitnesses[i - 1]) / (f_max - f_min)
+            )
+    return distances
+
+def truncate_population(pop, fitness, n_pop):
+    fronts, ranks = non_dominated_sorting(fitness)
+    new_pop = []
+    new_fitness = []
+    for front in fronts:
+        if len(new_pop) + len(front) <= n_pop:
+            new_pop.extend(pop[front])
+            new_fitness.extend(fitness[front])
+        else:
+            distances = calculate_crowding_distance(fitness, front)
+            sorted_indices = np.argsort(-distances)
+            remaining_slots = n_pop - len(new_pop)
+            selected_indices = sorted_indices[:remaining_slots]
+            new_pop.extend(pop[front][selected_indices])
+            new_fitness.extend(fitness[front][selected_indices])
+            break  # Population is full
+    return np.array(new_pop), np.array(new_fitness)
 
 def init(n_pop, n_vars):
     return np.random.uniform(-1, 1, (n_pop, n_vars))
@@ -120,64 +202,90 @@ def differential_evolution(env, n_pop, n_vars, generations, mutation_factor=0.8,
     
     return pop, fitness, best_fitness, mean_fitness, std_fitness
 
-def DEMO(env, multi_test_env, n_pop, n_vars, generations, mutation_factor=0.8, crossover_rate=0.7):
+def MODE(env, enemy_group, n_pop, n_vars, generations, mutation_factor=0.8, crossover_rate=0.7):
+    multi_test_env = [Environment(
+        experiment_name=env.experiment_name,
+        enemies=[enemy],
+        multiplemode="no",
+        playermode="ai",
+        player_controller=env.player_controller,
+        enemymode="static",
+        level=2,
+        speed="fastest",
+        visuals=False
+    ) for enemy in enemy_group]
+
     pop = init(n_pop, n_vars)
-    fitness = evaluate(env, pop)[:, 0]
+    fitness = multi_evaluate(multi_test_env, pop)  # Shape: (n_pop, n_objectives)
         
     best_fitness = []
     mean_fitness = []
     std_fitness = []
     
     for gen in range(generations):
+        new_pop = []
+        new_fitness = []
         for i in range(n_pop):
             current_strategy = np.random.choice(['rand/1', 'best/1']) 
             
             if current_strategy == 'rand/1':
                 indices = list(range(n_pop))
                 indices.remove(i)
-                index_a, index_b, index_c = np.random.choice(indices, 3, replace = False)
-                a, b, c = pop[[index_a, index_b, index_c]]
+                idxs = np.random.choice(indices, 3, replace=False)
+                a, b, c = pop[idxs]
                 mutant = a + mutation_factor * (b - c)
             elif current_strategy == 'best/1':
-                best_idx = np.argmax(fitness)
+                # Determine the best individual based on Pareto rank
+                fronts, _ = non_dominated_sorting(fitness)
+                best_indices = fronts[0]
+                best_idx = np.random.choice(best_indices)
                 a = pop[best_idx]
-                index_a = best_idx
                 indices = list(range(n_pop))
                 indices.remove(best_idx)
-                
-                index_b, index_c = np.random.choice(indices, 2, replace = False)
-                b, c = pop[[index_b, index_c]]
+                idxs = np.random.choice(indices, 2, replace=False)
+                b, c = pop[idxs]
                 mutant = a + mutation_factor * (b - c)
             else:
                 raise ValueError("Unsupported DE strategy.")
-             
+            
+            mutant = np.clip(mutant, -1, 1)
             crossover_mask = np.random.rand(n_vars) < crossover_rate
             if not np.any(crossover_mask):
                 crossover_mask[np.random.randint(0, n_vars)] = True
             trial = np.where(crossover_mask, mutant, a)
             
-            trial_fitness, a_fitness = multi_evaluate(multi_test_env, [trial, a])[:, :, 0]
-            if np.all(trial_fitness >= a_fitness):
-                pop[index_a] = trial
-                fitness[index_a] = evaluate(env, [trial])[0][0]
-            elif np.all(trial_fitness <= a_fitness):
-                continue
-            else:
-                pop = np.append(pop, trial[np.newaxis, :], axis = 0)
-                fitness = np.append(fitness, evaluate(env, [trial])[0][0])
+            # Evaluate trial and parent 'a' on all objectives
+            fitness_values = multi_evaluate(multi_test_env, [trial, a])
+            trial_fitness = fitness_values[0]
+            a_fitness = fitness_values[1]
             
-            # truncate
-            if len(pop) > n_pop:
-                sorted_index = np.argsort(fitness)
-                pop = pop[sorted_index][:n_pop]
-                fitness = fitness[sorted_index][:n_pop]
-
-        best_fitness.append(np.max(fitness))
-        mean_fitness.append(np.mean(fitness))
-        std_fitness.append(np.std(fitness))
+            # Pareto dominance check
+            if dominates(trial_fitness, a_fitness):
+                new_pop.append(trial)
+                new_fitness.append(trial_fitness)
+            elif is_dominated_by(trial_fitness, a_fitness):
+                new_pop.append(a)
+                new_fitness.append(a_fitness)
+            else:
+                new_pop.append(a)
+                new_fitness.append(a_fitness)
+                new_pop.append(trial)
+                new_fitness.append(trial_fitness)
         
-        print(f'DEMO Generation {gen+1}: Best Fitness = {best_fitness[-1]:.4f}, '
-              f'Mean Fitness = {mean_fitness[-1]:.4f}, Std Fitness = {std_fitness[-1]:.4f}')
+        # Combine and truncate population
+        pop = np.array(new_pop)
+        fitness = np.array(new_fitness)
+        if len(pop) > n_pop:
+            pop, fitness = truncate_population(pop, fitness, n_pop)
+        
+        # Record fitness for monitoring
+        sum_fitness = np.sum(fitness, axis=1)
+        best_fitness.append(np.max(sum_fitness))
+        mean_fitness.append(np.mean(sum_fitness))
+        std_fitness.append(np.std(sum_fitness))
+        
+        print(f'MODE Generation {gen+1}: Best Fitness Sum = {best_fitness[-1]:.4f}, '
+              f'Mean Fitness Sum = {mean_fitness[-1]:.4f}, Std Fitness Sum = {std_fitness[-1]:.4f}')
     
     return pop, fitness, best_fitness, mean_fitness, std_fitness
 
@@ -261,18 +369,6 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
         visuals=False
     )
 
-    os.makedirs('test/', exist_ok = True)
-    multi_test_env = [Environment(
-        enemies = [i],
-        multiplemode="no",
-        playermode="ai",
-        player_controller=player_controller(n_hidden_neurons),
-        enemymode="static",
-        level=2,
-        speed="fastest",
-        visuals=False) for i in range(1, 9)
-    ]
-
     num_sensors = env.get_num_sensors()
     n_vars = (num_sensors + 1) * n_hidden_neurons + (n_hidden_neurons + 1) * 5
     print(f'Enemy Group {enemy_group_str}: num_sensors={num_sensors}, n_vars={n_vars}')
@@ -290,9 +386,9 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
         )
         best_individual = pop[np.argmax(fitness)]
         final_fitness = np.max(fitness)  # 获取最后一代的最佳适应度
-    elif algorithm == 'DEMO':
-        pop, fitness, best_f, mean_f, std_f = DEMO(
-            env, multi_test_env, n_pop, n_vars, generations, mutation_factor, crossover_rate
+    elif algorithm == 'MODE':
+        pop, fitness, best_f, mean_f, std_f = MODE(
+            env, enemy_group, n_pop, n_vars, generations, mutation_factor, crossover_rate
         )
         best_individual = pop[np.argmax(fitness)]
         final_fitness = np.max(fitness)  # 获取最后一代的最佳适应度
@@ -356,7 +452,7 @@ def main():
     enemy_groups = [(1,3,4), (1,5,6), (1,7,8), (2,3,4), (2,5,6), (2,7,8)]
     # algorithms = ["NSGA2", "DE"]
 
-    algorithms = ["DEMO"]
+    algorithms = ["MODE"]
 
     generations = 30
     n_pop = 100
