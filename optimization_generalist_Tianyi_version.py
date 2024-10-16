@@ -16,6 +16,12 @@ def simulation(env, x):
 def evaluate(env, x):
     return np.array([simulation(env, individual) for individual in x])
 
+def multi_evaluate(multi_env, x):
+    res = []
+    for individual in x:
+        res.append(np.array([simulation(env, individual) for env in multi_env]))
+    return np.array(res)
+
 def init(n_pop, n_vars):
     return np.random.uniform(-1, 1, (n_pop, n_vars))
 
@@ -114,6 +120,67 @@ def differential_evolution(env, n_pop, n_vars, generations, mutation_factor=0.8,
     
     return pop, fitness, best_fitness, mean_fitness, std_fitness
 
+def DEMO(env, multi_test_env, n_pop, n_vars, generations, mutation_factor=0.8, crossover_rate=0.7):
+    pop = init(n_pop, n_vars)
+    fitness = evaluate(env, pop)[:, 0]
+        
+    best_fitness = []
+    mean_fitness = []
+    std_fitness = []
+    
+    for gen in range(generations):
+        for i in range(n_pop):
+            current_strategy = np.random.choice(['rand/1', 'best/1']) 
+            
+            if current_strategy == 'rand/1':
+                indices = list(range(n_pop))
+                indices.remove(i)
+                index_a, index_b, index_c = np.random.choice(indices, 3, replace = False)
+                a, b, c = pop[[index_a, index_b, index_c]]
+                mutant = a + mutation_factor * (b - c)
+            elif current_strategy == 'best/1':
+                best_idx = np.argmax(fitness)
+                a = pop[best_idx]
+                index_a = best_idx
+                indices = list(range(n_pop))
+                indices.remove(best_idx)
+                
+                index_b, index_c = np.random.choice(indices, 2, replace = False)
+                b, c = pop[[index_b, index_c]]
+                mutant = a + mutation_factor * (b - c)
+            else:
+                raise ValueError("Unsupported DE strategy.")
+             
+            crossover_mask = np.random.rand(n_vars) < crossover_rate
+            if not np.any(crossover_mask):
+                crossover_mask[np.random.randint(0, n_vars)] = True
+            trial = np.where(crossover_mask, mutant, a)
+            
+            trial_fitness, a_fitness = multi_evaluate(multi_test_env, [trial, a])[:, :, 0]
+            if np.all(trial_fitness >= a_fitness):
+                pop[index_a] = trial
+                fitness[index_a] = evaluate(env, [trial])[0][0]
+            elif np.all(trial_fitness <= a_fitness):
+                continue
+            else:
+                pop = np.append(pop, trial[np.newaxis, :], axis = 0)
+                fitness = np.append(fitness, evaluate(env, [trial])[0][0])
+            
+            # truncate
+            if len(pop) > n_pop:
+                sorted_index = np.argsort(fitness)
+                pop = pop[sorted_index][:n_pop]
+                fitness = fitness[sorted_index][:n_pop]
+
+        best_fitness.append(np.max(fitness))
+        mean_fitness.append(np.mean(fitness))
+        std_fitness.append(np.std(fitness))
+        
+        print(f'DEMO Generation {gen+1}: Best Fitness = {best_fitness[-1]:.4f}, '
+              f'Mean Fitness = {mean_fitness[-1]:.4f}, Std Fitness = {std_fitness[-1]:.4f}')
+    
+    return pop, fitness, best_fitness, mean_fitness, std_fitness
+
 def calculate_gain(env, best_individual):
     _, player_hp, enemy_hp, _ = env.play(pcont=best_individual)
     gain = player_hp - enemy_hp
@@ -193,7 +260,19 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
         speed="fastest",
         visuals=False
     )
-    
+
+    os.makedirs('test/', exist_ok = True)
+    multi_test_env = [Environment(
+        enemies = [i],
+        multiplemode="no",
+        playermode="ai",
+        player_controller=player_controller(n_hidden_neurons),
+        enemymode="static",
+        level=2,
+        speed="fastest",
+        visuals=False) for i in range(1, 9)
+    ]
+
     num_sensors = env.get_num_sensors()
     n_vars = (num_sensors + 1) * n_hidden_neurons + (n_hidden_neurons + 1) * 5
     print(f'Enemy Group {enemy_group_str}: num_sensors={num_sensors}, n_vars={n_vars}')
@@ -208,6 +287,12 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
     elif algorithm == 'DE':
         pop, fitness, best_f, mean_f, std_f = differential_evolution(
             env, n_pop, n_vars, generations, mutation_factor, crossover_rate
+        )
+        best_individual = pop[np.argmax(fitness)]
+        final_fitness = np.max(fitness)  # 获取最后一代的最佳适应度
+    elif algorithm == 'DEMO':
+        pop, fitness, best_f, mean_f, std_f = DEMO(
+            env, multi_test_env, n_pop, n_vars, generations, mutation_factor, crossover_rate
         )
         best_individual = pop[np.argmax(fitness)]
         final_fitness = np.max(fitness)  # 获取最后一代的最佳适应度
@@ -269,7 +354,9 @@ def main():
     np.random.seed(args.seed)
     
     enemy_groups = [(1,3,4), (1,5,6), (1,7,8), (2,3,4), (2,5,6), (2,7,8)]
-    algorithms = ["NSGA2", "DE"]
+    # algorithms = ["NSGA2", "DE"]
+
+    algorithms = ["DEMO"]
 
     generations = 30
     n_pop = 100
