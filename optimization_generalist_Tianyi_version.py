@@ -26,8 +26,6 @@ def multi_evaluate(multi_envs, x):
             individual_fitness.append(f)
         fitness_values.append(individual_fitness)
     fitness_values = np.array(fitness_values)
-    if fitness_values.ndim == 1:
-        fitness_values = fitness_values[:, np.newaxis]
     return fitness_values  # Shape: (n_individuals, n_objectives)
 
 def dominates(fitness_a, fitness_b):
@@ -284,8 +282,8 @@ def MODE(env, enemy_group, n_pop, n_vars, generations, mutation_factor=0.8, cros
         mean_fitness.append(np.mean(sum_fitness))
         std_fitness.append(np.std(sum_fitness))
         
-        print(f'MODE Generation {gen+1}: Best Fitness Sum = {best_fitness[-1]:.4f}, '
-              f'Mean Fitness Sum = {mean_fitness[-1]:.4f}, Std Fitness Sum = {std_fitness[-1]:.4f}')
+        print(f'MODE Generation {gen+1}: Best Fitness = {best_fitness[-1]:.4f}, '
+              f'Mean Fitness = {mean_fitness[-1]:.4f}, Std Fitness = {std_fitness[-1]:.4f}')
     
     return pop, fitness, best_fitness, mean_fitness, std_fitness
 
