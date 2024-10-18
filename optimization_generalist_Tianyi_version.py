@@ -388,15 +388,41 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
         pop, fitness, best_f, mean_f, std_f = MODE(
             env, enemy_group, n_pop, n_vars, generations, mutation_factor, crossover_rate
         )
-        best_individual = pop[np.argmax(fitness)]
-        final_fitness = np.max(fitness)  # 获取最后一代的最佳适应度
+
+        best_idx = 0
+        for idx in range(1, len(pop)):
+            if np.sum(fitness[best_idx]) > np.sum(fitness[idx]):
+                best_idx = idx
+            elif np.sum(fitness[best_idx]) == np.sum(fitness[idx]) and np.sum(fitness[best_idx]) > np.sum(fitness[idx]):
+                best_idx = idx
+
+        best_individual = pop[best_idx]
+        final_fitness = fitness[best_idx]
     else:
         raise ValueError("Unsupported algorithm type.")
     
+    np.save(os.path.join(experiment_name, 'pop.npy'), pop)
+
     np.save(os.path.join(experiment_name, 'best_individual.npy'), best_individual)
     
-    final_gain = calculate_gain(env, best_individual)
+    # final_gain = calculate_gain(env, best_individual)
     
+    final_gain = 0
+    for i in range(1, 9):
+        test_env = Environment(
+            experiment_name=experiment_name,
+            enemies = [i],
+            multiplemode="no",
+            playermode="ai",
+            player_controller=player_controller(n_hidden_neurons),
+            enemymode="static",
+            level=2,
+            speed="fastest",
+            visuals=False
+        )
+
+        final_gain = final_gain + calculate_gain(test_env, best_individual)
+
     return final_fitness, final_gain
 
 def test(enemy_group, algorithm, run):
@@ -474,7 +500,7 @@ def main():
                 )
 
                 enemy_group_str = '-'.join(map(str, enemy_group))
-                print(f"{algorithm}\t{enemy_group_str}\t{final_fitness:.4f}\t{final_gain:.4f}")
+                print(f"{algorithm}\t{enemy_group_str}\t{final_fitness}\t{final_gain:.4f}")
 
         print('\n=== Training Completed ===\n')
 
