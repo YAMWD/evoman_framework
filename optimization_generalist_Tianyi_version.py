@@ -22,8 +22,8 @@ def multi_evaluate(multi_envs, x):
         # Evaluate individual on all environments
         individual_fitness = []
         for env in multi_envs:
-            f, _, _, _ = simulation(env, individual)
-            individual_fitness.append(f)
+            f, p, e, _ = simulation(env, individual)
+            individual_fitness.append(p - e)
         fitness_values.append(individual_fitness)
     fitness_values = np.array(fitness_values)
     return fitness_values  # Shape: (n_individuals, n_objectives)
@@ -391,13 +391,14 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
 
         best_idx = 0
         for idx in range(1, len(pop)):
-            if np.sum(fitness[best_idx]) > np.sum(fitness[idx]):
+            if np.sum(fitness[best_idx] > 0) < np.sum(fitness[idx] > 0):
                 best_idx = idx
-            elif np.sum(fitness[best_idx]) == np.sum(fitness[idx]) and np.sum(fitness[best_idx]) > np.sum(fitness[idx]):
+            elif np.sum(fitness[best_idx] > 0) == np.sum(fitness[idx] > 0) and np.sum(fitness[best_idx]) < np.sum(fitness[idx]):
                 best_idx = idx
 
         best_individual = pop[best_idx]
         final_fitness = fitness[best_idx]
+
     else:
         raise ValueError("Unsupported algorithm type.")
     
@@ -405,8 +406,21 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
 
     np.save(os.path.join(experiment_name, 'best_individual.npy'), best_individual)
     
-    # final_gain = calculate_gain(env, best_individual)
+    test_env_2 = Environment(
+        experiment_name=experiment_name,
+        enemies = [1, 2, 3, 4, 5, 6, 7, 8],
+        multiplemode="yes",
+        playermode="ai",
+        player_controller=player_controller(n_hidden_neurons),
+        enemymode="static",
+        level=2,
+        speed="fastest",
+        visuals=False
+    )
     
+    final_gain = calculate_gain(test_env_2, best_individual)
+    print(final_gain)
+
     final_gain = 0
     for i in range(1, 9):
         test_env = Environment(
@@ -421,6 +435,7 @@ def train(enemy_group, algorithm, run, n_pop, generations, mutation_rate, mutati
             visuals=False
         )
 
+        print(i, calculate_gain(test_env, best_individual))
         final_gain = final_gain + calculate_gain(test_env, best_individual)
 
     return final_fitness, final_gain
@@ -473,13 +488,15 @@ def main():
     args = parser.parse_args()
     np.random.seed(args.seed)
     
-    enemy_groups = [(1,3,4), (1,5,6), (1,7,8), (2,3,4), (2,5,6), (2,7,8)]
+    # enemy_groups = [(1,3,4), (1,5,6), (1,7,8), (2,3,4), (2,5,6), (2,7,8)]
+    enemy_groups = [[1, 3, 4, 6, 7]]
+    # enemy_groups = [[3, 4, 7, 8]]
     # algorithms = ["NSGA2", "DE"]
 
     algorithms = ["MODE"]
 
     generations = 30
-    n_pop = 100
+    n_pop = 200
     mutation_rate = 0.2
     mutation_factor = 0.5
     crossover_rate = 0.6
