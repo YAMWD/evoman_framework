@@ -34,7 +34,7 @@ The main features of this project include:
 - NumPy
 - SciPy
 - EvoMan framework (ensure proper installation and configuration)
-- 
+- DEAP
 ### Setup
 
 1. Clone or download this project to a local directory.
