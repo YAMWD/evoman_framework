@@ -58,6 +58,7 @@ for testing enemies on all enemies.
 For parameter tuning for NSGA-II.
 
 To implement NSGA-III training and test, use the following commands:
+
    `python DEMO.py -m train`
     
 for testing enemies on all enemies.
