@@ -11,8 +11,9 @@ This project focuses on evolving AI controllers for the EvoMan game environment,
 
 In Assignment 2, we extend the approach to multi-objective optimization, training AI controllers against multiple enemies. For this, we upgraded the algorithms as follows:
 
-	•	GA was upgraded to NSGA-II, a multi-objective version of the Genetic Algorithm from the DEAP library (https://deap.readthedocs.io/en/master/).
-	•	DE was upgraded to DEMO (Differential Evolution for Multi-objective Optimization), by modifying the selection mechanism to handle multiple objectives.
+GA was upgraded to NSGA-II, a multi-objective version of the Genetic Algorithm from the DEAP library (https://deap.readthedocs.io/en/master/).
+
+DE was upgraded to DEMO (Differential Evolution for Multi-objective Optimization), by modifying the selection mechanism to handle multiple objectives.
 
 
 ## 2. Features
@@ -55,6 +56,13 @@ for testing enemies on all enemies.
    `python Tuning.py -train`
 
 For parameter tuning for NSGA-II.
+
+To implement NSGA-III training and test, use the following commands:
+   `python DEMO.py -m train`
+    
+for testing enemies on all enemies.
+
+   `python NSGA3.py -m test`
     
 
 
