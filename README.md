@@ -42,26 +42,26 @@ The main features of this project include:
 3. install deap, numpy and scipy
 
 ### Execution
-   ```bash
+   `
    python optimization_generalist_Tianyi_version.py -m train -n 1 -r 5
-   ```
+   `
    This will train on enemy 1 for 5 runs.
 
-    To implement NSGA-III training and test, use the following commands:
-    ```bash
+   To implement NSGA-III training and test, use the following commands:
+   `
    python NSGA3.py -m train
-   ```
+   `
     
     for training enemies on both enemy group sets.
-    ```bash
+   `
    python NSGA3.py -m test
-   ```
+   `
     
     for testing enemies on all enemies.
     For parameter tuning for NSGA-III, use:
-    ```bash
+   `
    python Tuning.py -train
-   ```
+   `
     
 
 
